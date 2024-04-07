@@ -162,6 +162,7 @@ fn main() {
     ["GIS","0.00014070456001948425","0.02785117996979955","0.25049285034587654"],
     ["K","0.0003927972976869379","0.020786844838313015","0.3464482094969757"]
     ];
+    
 
     //RW LOCKS
     // create RWlocks for parameters and stocks
@@ -243,9 +244,22 @@ fn main() {
         }
     });
 
+    //USER
+    struct UserPortfolio {
+        name: String,
+        sector: String,
+        buy_rsi: f64,
+        sell_rsi: f64,
+        rate_change: f64,
+        buy_trading_profit: f64,
+        sell_trading_profit: f64,
+        sell_loss: i32,
+        funds: f64,
+        safety_funds: f64,
+        max_rate: f64,
+    }
 
     //TRANSACTION
-        
     struct StockTransaction {
         name:String,
         stock_name: String,
@@ -268,17 +282,19 @@ fn main() {
     let tx_for_thread = Arc::clone(&tx);
     let EventProcessingEngine = thread::spawn(move ||{
         // user criteria
-        let mut name = "Khabib Nurmagamedov".to_string(); 
-        let mut sector = "Technology".to_string(); 
-        let mut buyRSI = 70.0;
-        let mut sellRSI = 30.0;
-        let mut rateChange = 0.05;
-        let mut buyTradingProfit = 0.0; 
-        let mut sellTradingProfit = 10.0;
-        let mut sellLoss = 5;
-        let mut funds = 90000.0;
-        let mut safetyFunds = 10000.0;
-        let mut maxRate = 160.0;
+        let mut user = UserPortfolio {
+            name: "Khabib Nurmagamedov".to_string(),
+            sector: "Technology".to_string(),
+            buy_rsi: 70.0,
+            sell_rsi: 30.0,
+            rate_change: 0.05,
+            buy_trading_profit: 0.0,
+            sell_trading_profit: 10.0,
+            sell_loss: 5,
+            funds: 90000.0,
+            safety_funds: 10000.0,
+            max_rate: 160.0,
+        };
 
         // stocks bought (cols=symbol,numOfStocks,priceBought)
         let mut stocks_bought = vec![
@@ -314,19 +330,19 @@ fn main() {
                     let no_stocks:i64 = stock[3].parse().expect("Error converting string to float");
                     let s_br:f64 = stock[6].parse().expect("Error converting string to float");
 
-                    if sector==*s_sector && s_current_price<maxRate && s_rsi<sellRSI 
-                    && s_change>rateChange{
+                    if user.sector==*s_sector && s_current_price<user.max_rate && s_rsi<user.sell_rsi 
+                    && s_change>user.rate_change{
                         
                         // send the purchase request to the channel
                         let transaction = StockTransaction{
                             name:"1".to_string(),
                             stock_name: stock[0].clone(),
-                            user_funds: funds-safetyFunds,
+                            user_funds: user.funds-user.safety_funds,
                             stock_price: s_current_price,
                             buy_sell: "buy".to_string(),
                         };
 
-                        println!("{} has requested the broker to purchase {} stocks worth {:?}",name,stock[0],funds-safetyFunds);
+                        println!("{} has requested the broker to purchase {} stocks worth {:?}",user.name,stock[0],user.funds-user.safety_funds);
                         //send the transaction to the broker
                         {
                             let tx_locked = tx_for_thread.lock().unwrap();
@@ -337,7 +353,7 @@ fn main() {
                         if let Ok(response) = rx1.try_recv(){
                             if response=="Accepted".to_string(){
                                 // calculate stocks bought
-                                let max_purchase = funds as f64 -safetyFunds as f64; // the current buying capacity of the user
+                                let max_purchase = user.funds as f64 -user.safety_funds as f64; // the current buying capacity of the user
                                 let mut num_stocks_purchased = 0;
                                 if max_purchase<(no_stocks as f64 * s_br){
                                     let val = max_purchase/s_br;
@@ -363,15 +379,15 @@ fn main() {
                                     if sb[0] == stock[0] {
                                         let num_shares: f64 = sb[1].parse().unwrap();
                                         let price_per_share: f64 = sb[2].parse().unwrap();
-                                        funds -= num_shares * price_per_share;
+                                        user.funds -= num_shares * price_per_share;
                                     }
                                 }
     
                                 if num_stocks_purchased!=0{
-                                    println!("{} has bought {:?} {} stocks and has {:?} remaining now",name,num_stocks_purchased,stock[0],funds);
+                                    println!("{} has bought {:?} {} stocks and has {:?} remaining now",user.name,num_stocks_purchased,stock[0],user.funds-user.safety_funds);
                                 }
                             }else{
-                                println!("{} request to buy {} stocks has been rejected",name,stock[0]);
+                                println!("{} request to buy {} stocks has been rejected",user.name,stock[0]);
                             }
                         }
                     } 
@@ -414,18 +430,18 @@ fn main() {
                             let s_rsi:f64 =  stock[7].parse().expect("Error converting string to float");
                             let s_sr:f64 =  stock[5].parse().expect("Error converting string to float");
 
-                            if s_rsi>buyRSI || profit_loss_percentage>0.1 || profit_loss_percentage< -0.05{
+                            if s_rsi>user.buy_rsi || profit_loss_percentage>0.1 || profit_loss_percentage< -0.05{
 
                                 // send the purchase request to the channel
                                 let transaction = StockTransaction{
                                     name:"1".to_string(),
                                     stock_name: stock[0].clone(),
-                                    user_funds: funds-safetyFunds,
+                                    user_funds: user.funds-user.safety_funds,
                                     stock_price: stock[1].parse().expect("Error converting"),
                                     buy_sell: "sell".to_string(),
                                 };
 
-                                println!("{} has requested the broker to sell {} stocks worth {:?}",name,stock[0],sb[1]);
+                                println!("{} has requested the broker to sell {} stocks worth {:?}",user.name,stock[0],sb[1]);
                                 //send the transaction to the broker
                                 {
                                     let tx_locked = tx_for_thread.lock().unwrap();
@@ -442,14 +458,14 @@ fn main() {
                                         let new_funds = num_stocks as f64 *s_sr;
                                         stock_name_to_mod = stock[0].clone();
                                         // update user funds
-                                        funds += new_funds;
+                                        user.funds += new_funds;
 
                                         // clear the stock from stocks_owned variable
                                         sb[1] = "0".to_string();
                                         sb[2] = "0".to_string();
                                         
                                         if num_stocks!=0{
-                                            println!("{} has sold {:?} of {} stock and now has {:?} ringitt with a profit of {}",name,num_stocks,stock[0],funds,profit);
+                                            println!("{} has sold {:?} of {} stock and now has {:?} ringitt with a profit of {}",user.name,num_stocks,stock[0],user.funds,profit);
                                         }
                                     }
                                 }
