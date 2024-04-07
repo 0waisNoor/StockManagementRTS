@@ -1,12 +1,14 @@
 extern crate rand;
 extern crate rand_distr;
 
+use std::future::pending;
 use std::thread;
 use std::time::Duration;
 use rand::prelude::*;
 use rand_distr::{Normal, Distribution};
 use std::sync::{Arc, RwLock};
 use std::sync::{mpsc, Mutex};
+use rand::{distributions::Alphanumeric, Rng};
 
 fn main() {
 
@@ -32,6 +34,14 @@ fn main() {
         
             rsi
         }
+
+    fn generate_random_string(len: usize) -> String {
+        let rng = rand::thread_rng();
+        rng.sample_iter(&Alphanumeric)
+            .take(len)
+            .map(char::from)
+            .collect()
+    }
 
     // STOCKS
     // Columns = Symbol,Price,Change after 1 day,Volume of traded shares,Sector,sell rate,buy rate,RSI
@@ -234,12 +244,12 @@ fn main() {
             }    
             // testing prints            
             let stocks = stocks_for_thread.read().unwrap();
-            println!("AAPL {:?}",&stocks[0]);
-            println!("MSFT {:?}",&stocks[1]);
-            println!("GOOG {:?}",&stocks[2]);
-            println!("AMZN {:?}",&stocks[3]);
-            println!("FB {:?}",&stocks[4]);
-            println!("TSLA {:?}",&stocks[5]);
+            println!("DE {:?}",&stocks[0]);
+            println!("AGCO {:?}",&stocks[1]);
+            println!("CF {:?}",&stocks[2]);
+            println!("AMOS {:?}",&stocks[3]);
+            println!("ADM {:?}",&stocks[4]);
+            println!("BG {:?}",&stocks[5]);
             println!("   ");
         }
     });
@@ -257,33 +267,11 @@ fn main() {
         funds: f64,
         safety_funds: f64,
         max_rate: f64,
+        id:String,
     }
 
-    //TRANSACTION
-    struct StockTransaction {
-        name:String,
-        stock_name: String,
-        user_funds: f64,
-        stock_price: f64,
-        buy_sell: String,
-    }
-
-    // channel to send buy/sell requests to broker
-    let (tx, rx) = mpsc::channel::<StockTransaction>();
-    let tx = Arc::new(Mutex::new(tx));
-    
-    //channel for broker to respond to user1
-    let (tx1, rx1) = mpsc::channel::<String>();
-    let tx1 = Arc::new(Mutex::new(tx1));
-
-    //EVENT PROCESSING ENGINE
-
-    let stocks_for_thread = Arc::clone(&stocks);
-    let tx_for_thread = Arc::clone(&tx);
-    let EventProcessingEngine = thread::spawn(move ||{
-        // user criteria
-        let mut user = UserPortfolio {
-            name: "Khabib Nurmagamedov".to_string(),
+    let mut user1 = UserPortfolio {
+            name: "Khabib Nurmagomedov".to_string(),
             sector: "Technology".to_string(),
             buy_rsi: 70.0,
             sell_rsi: 30.0,
@@ -294,8 +282,71 @@ fn main() {
             funds: 90000.0,
             safety_funds: 10000.0,
             max_rate: 160.0,
+            id:"1".to_string(),
+        };
+    let mut user2 = UserPortfolio {
+            name: "Conor McGregor".to_string(),
+            sector: "Agriculture".to_string(), // Assuming a different sector for variety
+            buy_rsi: 65.0, // Example values, adjust as necessary
+            sell_rsi: 35.0,
+            rate_change: 0.04,
+            buy_trading_profit: 0.0,
+            sell_trading_profit: 8.0,
+            sell_loss: 4,
+            funds: 80000.0,
+            safety_funds: 15000.0,
+            max_rate: 150.0,
+            id:"2".to_string()
+        };
+    let mut user3 = UserPortfolio {
+            name: "Jon Jones".to_string(),
+            sector: "Food and Beverage Retail".to_string(), // Assuming a different sector for variety
+            buy_rsi: 68.0, // Example values, adjust as necessary
+            sell_rsi: 32.0,
+            rate_change: 0.06,
+            buy_trading_profit: 0.0,
+            sell_trading_profit: 12.0,
+            sell_loss: 6,
+            funds: 95000.0,
+            safety_funds: 5000.0,
+            max_rate: 170.0,
+            id:"3".to_string()
         };
 
+    //TRANSACTION
+    struct StockTransaction {
+        name:String,
+        stock_name: String,
+        user_funds: f64,
+        stock_price: f64,
+        buy_sell: String,
+        id:String,
+    }
+
+    struct TransactionResponse {
+        id:String,
+        status:String,
+        num_stocks:i64,
+        buy_rate:f64,
+    }
+
+    // channel to send buy/sell requests to broker
+    let (tx, rx) = mpsc::channel::<StockTransaction>();
+    let tx = Arc::new(Mutex::new(tx));
+    
+    //channel for broker to respond to users
+    let (tx1, rx1) = mpsc::channel::<TransactionResponse>();
+    let tx1 = Arc::new(Mutex::new(tx1));
+
+    let (tx2, rx2) = mpsc::channel::<TransactionResponse>();
+    let tx2 = Arc::new(Mutex::new(tx2));
+
+    let (tx3, rx3) = mpsc::channel::<TransactionResponse>();
+    let tx3 = Arc::new(Mutex::new(tx3));
+
+    //EVENT PROCESSING ENGINE
+
+    fn EventProcessingEngine(mut user: UserPortfolio,stocks_for_thread: Arc<RwLock<Vec<[String; 8]>>>,tx_for_thread: Arc<Mutex<mpsc::Sender<StockTransaction>>>,rcv: mpsc::Receiver<TransactionResponse>){
         // stocks bought (cols=symbol,numOfStocks,priceBought)
         let mut stocks_bought = vec![
             ["AAPL".to_string(),"0".to_string(),"0".to_string()],
@@ -310,6 +361,18 @@ fn main() {
             ["ORCL".to_string(),"0".to_string(),"0".to_string()],
         ];
 
+        // these variables stores the transaction id and stock the thread is waiting for
+        let mut pending_transaction_id = "".to_string();
+        let mut pending_stock = ["AAPL".to_string(), "130.71".to_string(), "-3.98".to_string(), "3783".to_string(), "Technology".to_string(), "134.69".to_string(), "131.75106760630413".to_string(), "69.59491933781679".to_string()];
+        let mut pending_selling_transaction_id = "".to_string();
+        let mut pending_selling_transaction_id2 = "".to_string(); // used when feedback (from channel) is received by the buying clause instead of selling clause
+        let mut pending_stock_sell = ["AAPL".to_string(), "130.71".to_string(), "-3.98".to_string(), "3783".to_string(), "Technology".to_string(), "134.69".to_string(), "131.75106760630413".to_string(), "69.59491933781679".to_string()];
+        let mut pending_stock_bought =  ["AAPL".to_string(),"0".to_string(),"0".to_string()];
+        let mut pending_selling_rate = 0.0;
+        let mut pending_profit=0.0;
+
+        let mut userSellStatus = "CanSell";
+        let mut userStatus = "CanOrder";
         //monitor and buy/sell stocks accordingly
         loop{
             thread::sleep(Duration::from_secs(2));
@@ -317,7 +380,6 @@ fn main() {
 
             let mut stock_name_to_mod = "".to_string();
             let mut stock_quantity_to_mod = 0;
-            
             
             // read stocks
             {
@@ -328,99 +390,93 @@ fn main() {
                     let s_rsi:f64 =  stock[7].parse().expect("Error converting string to float");
                     let s_change:f64 =  stock[2].parse().expect("Error converting string to float");
                     let no_stocks:i64 = stock[3].parse().expect("Error converting string to float");
-                    let s_br:f64 = stock[6].parse().expect("Error converting string to float");
 
-                    if user.sector==*s_sector && s_current_price<user.max_rate && s_rsi<user.sell_rsi 
-                    && s_change>user.rate_change{
-                        
-                        // send the purchase request to the channel
-                        let transaction = StockTransaction{
-                            name:"1".to_string(),
-                            stock_name: stock[0].clone(),
-                            user_funds: user.funds-user.safety_funds,
-                            stock_price: s_current_price,
-                            buy_sell: "buy".to_string(),
-                        };
+                    if userStatus=="CanOrder"{
+                        if user.sector==*s_sector && s_current_price<user.max_rate && s_rsi<user.sell_rsi 
+                        && s_change>user.rate_change{
+                            
+                            // send the purchase request to the channel
+                            let transaction = StockTransaction{
+                                name:user.id.clone(),
+                                stock_name: stock[0].clone(),
+                                user_funds: user.funds-user.safety_funds,
+                                stock_price: s_current_price,
+                                buy_sell: "buy".to_string(),
+                                id:generate_random_string(8),
+                            };
 
-                        println!("{} has requested the broker to purchase {} stocks worth {:?}",user.name,stock[0],user.funds-user.safety_funds);
-                        //send the transaction to the broker
-                        {
-                            let tx_locked = tx_for_thread.lock().unwrap();
-                            tx_locked.send(transaction).unwrap();
-                        }
+                            // store id and stock to allow pending code to use
+                            pending_transaction_id = transaction.id.clone();
+                            pending_stock = stock.clone();
+                            
 
-                        //wait for the response of the broker
-                        if let Ok(response) = rx1.try_recv(){
-                            if response=="Accepted".to_string(){
-                                // calculate stocks bought
-                                let max_purchase = user.funds as f64 -user.safety_funds as f64; // the current buying capacity of the user
-                                let mut num_stocks_purchased = 0;
-                                if max_purchase<(no_stocks as f64 * s_br){
-                                    let val = max_purchase/s_br;
-                                    num_stocks_purchased = val as i64;
-                                }else{
-                                    num_stocks_purchased = no_stocks;
-                                }
-    
-                                // deduct number of stocks from stock market
-                                stock_name_to_mod = stock[0].clone();
-                                stock_quantity_to_mod = num_stocks_purchased;
-    
-                                // add number of stocks and buy rate to stocks bought 
-                                for sb in stocks_bought.iter_mut(){
-                                    if sb[0]==stock[0]{
-                                        sb[1] = num_stocks_purchased.to_string();
-                                        sb[2] = s_br.to_string();
-                                    }
-                                }
-    
-                                // update user funds
-                                for sb in stocks_bought.iter() {
-                                    if sb[0] == stock[0] {
-                                        let num_shares: f64 = sb[1].parse().unwrap();
-                                        let price_per_share: f64 = sb[2].parse().unwrap();
-                                        user.funds -= num_shares * price_per_share;
-                                    }
-                                }
-    
-                                if num_stocks_purchased!=0{
-                                    println!("{} has bought {:?} {} stocks and has {:?} remaining now",user.name,num_stocks_purchased,stock[0],user.funds-user.safety_funds);
-                                }
-                            }else{
-                                println!("{} request to buy {} stocks has been rejected",user.name,stock[0]);
+                            println!("{} has requested the broker to purchase {} stocks worth {:?} (id={})",user.name,stock[0],user.funds-user.safety_funds,transaction.id);
+
+                            //send the transaction to the broker
+                            {
+                                let tx_locked = tx_for_thread.lock().unwrap();
+                                
+                                    tx_locked.send(transaction).unwrap();
+                                    // change userStatus to prevent other transactions from the user
+                                    // this is to ensure there is 1 transaction at a time in feedback channel
+                                    userStatus="Pending";
                             }
+
+                        }
+                    }
+                }
+
+                if userStatus=="Pending"{
+                //wait for the response of the broker
+                    if let Ok(response) = rcv.try_recv(){
+                        if response.status=="Accepted".to_string() && pending_transaction_id==response.id{
+
+                                // add number of stocks and buy rate to stocks bought 
+                            for sb in stocks_bought.iter_mut(){
+                                if sb[0]==pending_stock[0]{
+                                    sb[1] = response.num_stocks.to_string();
+                                    sb[2] = response.buy_rate.to_string();
+                                }
+                            }
+
+                            // update user funds
+                            for sb in stocks_bought.iter() {
+                                if sb[0] == pending_stock[0] {
+                                    let num_shares: f64 = sb[1].parse().unwrap();
+                                    let price_per_share: f64 = sb[2].parse().unwrap();
+                                    user.funds -= num_shares * price_per_share;
+                                }
+                            }
+                            
+                            // change user status
+                            userStatus = "CanOrder";
+
+                            if response.num_stocks!=0{
+                                println!("{} has bought {:?} {} stocks and has {:?} remaining now (id={})",user.name,response.num_stocks,pending_stock[0],user.funds-user.safety_funds,pending_transaction_id);
+                            }
+                        }else{
+                            pending_selling_transaction_id2 = response.id
                         }
                     } 
                 }
-                
             }
-            
-            let mut stocks = stocks_for_thread.write().unwrap();
-            for stock in stocks.iter_mut() {
-                if stock[0] == stock_name_to_mod {
-                    let current_quantity: i32 = stock[3].parse().expect("Error converting string to i32");
-                    let new_quantity = current_quantity - stock_quantity_to_mod as i32;
-                    stock[3] = new_quantity.to_string();
-                    break; // only one entry per stock, we can exit the loop once the match is found
-                }
-            }
-            // drop the lock
-            drop(stocks);
 
 
-            // sell stocks:
+            // sell stockss
+
             let mut num_stocks = 0;
             let mut stock_name_to_mod = "".to_string();
-            // read lock
-            let stocks = stocks_for_thread.read().unwrap(); 
             
-            // monitor and sell stocks
-            for stock in stocks.iter(){
-                for sb in stocks_bought.iter_mut(){
-                    if sb[0]==stock[0] && sb[1]!= "0".to_string(){
-                        
+            
+            if userSellStatus=="CanSell"{
+
+                // read lock
+                let stocks = stocks_for_thread.read().unwrap(); 
+                // monitor and sell stocks
+                for stock in stocks.iter(){
+                    for sb in stocks_bought.iter_mut(){
+                        if sb[0]==stock[0] && sb[1]!= "0".to_string(){
                             // calculate profit or loss
-                            let symbol = &stock[0];
                             let shares_bought: f64 = sb[1].parse().unwrap();
                             let share_value_when_buying: f64 = sb[2].parse().unwrap();
                             let current_price: f64 = stock[1].parse().unwrap();
@@ -430,71 +486,87 @@ fn main() {
                             let s_rsi:f64 =  stock[7].parse().expect("Error converting string to float");
                             let s_sr:f64 =  stock[5].parse().expect("Error converting string to float");
 
+                            let stock_name = &stock[0];
+                            let stock_price:f64  = stock[1].parse().expect("Error converting");
+                            
+
                             if s_rsi>user.buy_rsi || profit_loss_percentage>0.1 || profit_loss_percentage< -0.05{
+
+                                pending_stock_sell = stock.clone();
+                                pending_stock_bought = sb.clone();
+                                pending_selling_rate = s_sr;
+                                pending_profit = profit;
 
                                 // send the purchase request to the channel
                                 let transaction = StockTransaction{
                                     name:"1".to_string(),
-                                    stock_name: stock[0].clone(),
+                                    stock_name: stock_name.clone(),
                                     user_funds: user.funds-user.safety_funds,
-                                    stock_price: stock[1].parse().expect("Error converting"),
+                                    stock_price: stock_price,
                                     buy_sell: "sell".to_string(),
+                                    id:generate_random_string(8),
                                 };
-
-                                println!("{} has requested the broker to sell {} stocks worth {:?}",user.name,stock[0],sb[1]);
+                                pending_selling_transaction_id = transaction.id.clone();
+                                
                                 //send the transaction to the broker
+                                println!("{} has requested the broker to sell {} stocks worth {:?} (id={})",user.name,stock_name,sb[1],transaction.id);
+                                
                                 {
                                     let tx_locked = tx_for_thread.lock().unwrap();
                                     tx_locked.send(transaction).unwrap();
                                 }
                                 
                                 // We are waiting for the broker to send a response in the meanwhile
-
-                                 //wait for the response of the broker
-                                if let Ok(response) = rx1.try_recv(){
-                                    if response=="Accepted".to_string(){
-                                        let num_stocks_f:f64 = sb[1].parse().expect("error converting");
-                                        num_stocks = num_stocks_f as i64;
-                                        let new_funds = num_stocks as f64 *s_sr;
-                                        stock_name_to_mod = stock[0].clone();
-                                        // update user funds
-                                        user.funds += new_funds;
-
-                                        // clear the stock from stocks_owned variable
-                                        sb[1] = "0".to_string();
-                                        sb[2] = "0".to_string();
-                                        
-                                        if num_stocks!=0{
-                                            println!("{} has sold {:?} of {} stock and now has {:?} ringitt with a profit of {}",user.name,num_stocks,stock[0],user.funds,profit);
-                                        }
-                                    }
-                                }
-
+                                // change user status
+                                userSellStatus = "PendingSale";
                             }        
+                            
+                        }
                     }
                 }
             }
 
-            drop(stocks);
+            //wait for the response of the broker
+            if userSellStatus=="PendingSale"{
+                if let Ok(response) = rcv.try_recv(){
+                    if response.status=="Accepted".to_string() && (pending_selling_transaction_id==response.id || pending_selling_transaction_id2==response.id){
+                        let num_stocks_f:f64 = pending_stock_bought[1].parse().expect("error converting");
+                        num_stocks = num_stocks_f as i64;
+                        let new_funds = num_stocks as f64 *pending_selling_rate;
+                        stock_name_to_mod = pending_stock_sell[0].clone();
+                        // update user funds
+                        user.funds += new_funds;
 
-            // update stock quantity
-            let mut stocks = stocks_for_thread.write().unwrap();
-            for stock in stocks.iter_mut() {
-                if stock[0] == stock_name_to_mod {
-                    let current_quantity: i32 = stock[3].parse().expect("Error converting string to i32");
-                    let new_quantity = current_quantity + stock_quantity_to_mod as i32;
-                    stock[3] = new_quantity.to_string();
-                    break; // only one entry per stock, we can exit the loop once the match is found
+                        // clear the stock from stocks_owned variable
+                        pending_stock_bought[1] = "0".to_string();
+                        pending_stock_bought[2] = "0".to_string();
+                        
+                        if num_stocks!=0{
+                            println!("{} has sold {:?} of {} stock and now has {:?} ringitt with a profit of {} (id={})",user.name,num_stocks,pending_stock_sell[0],user.funds,pending_profit,pending_selling_transaction_id);
+                        }
+                        
+                        // update stock quantity    
+                        let mut stocks = stocks_for_thread.write().unwrap();
+                        for stock in stocks.iter_mut() {
+                            if stock[0] == stock_name_to_mod {
+                                let current_quantity: i32 = stock[3].parse().expect("Error converting string to i32");
+                                let new_quantity = current_quantity + stock_quantity_to_mod as i32;
+                                stock[3] = new_quantity.to_string();
+                            }
+                        }
+                        userSellStatus = "CanSell";
+                    }
                 }
-            }
+            }       
         }
-    });
+    }
 
 
 
     //BROKER:
-    let tx_for_thread = Arc::clone(&tx);
     let tx1_for_thread = Arc::clone(&tx1);
+    let tx2_for_thread = Arc::clone(&tx2);
+    let tx3_for_thread = Arc::clone(&tx3);
     let parameters_for_thread = Arc::clone(&parameters);
     let stocks_for_thread = Arc::clone(&stocks);
 
@@ -502,6 +574,10 @@ fn main() {
         loop{
             thread::sleep(Duration::from_millis(500));
             if let Ok(transaction) = rx.try_recv(){
+
+                // get transaction id to avoid move issues
+                let transaction_id = transaction.id.clone();
+
                 // decide order type based on the votality of the stock
                 let mut limitOrder=false;
                 {
@@ -509,7 +585,7 @@ fn main() {
                     for param in parameters.iter(){
                         if param[0]==transaction.stock_name{
                             let volatility:f64 = param[2].parse().expect("conversion error");
-                            if volatility<0.2{
+                            if volatility<0.02{
                                 limitOrder=false;
                             }else{
                                 limitOrder=true;
@@ -518,43 +594,117 @@ fn main() {
                     }
                 }
                 
+                //send transaction feedback to user
+                let mut response = TransactionResponse {
+                    id: "".to_string(),
+                    status: "".to_string(),
+                    num_stocks: 0,
+                    buy_rate: 0.0,
+                };
 
                 // Market Order
+
+                if transaction.buy_sell=="buy".to_string(){
+                    let mut stock_name_to_mod = "".to_string();
+                    let mut stock_quantity_to_mod = 0;
+                    let mut buy_rate = 0.0;
+                    {
+                        let stocks = stocks_for_thread.read().unwrap(); 
+                        let stock = stocks.iter().find(|&stock| stock[0] == transaction.stock_name).cloned().unwrap();
+                        let s_sector = &stock[4];
+                        let s_current_price:f64 = stock[1].parse().expect("Error converting string to float");
+                        let s_rsi:f64 =  stock[7].parse().expect("Error converting string to float");
+                        let s_change:f64 =  stock[2].parse().expect("Error converting string to float");
+                        let no_stocks:i64 = stock[3].parse().expect("Error converting string to float");
+                        let s_br:f64 = stock[6].parse().expect("Error converting string to float");
+
+                        // store buy rate so it can be sent back to user with response
+                        buy_rate = s_br;
+
+                        // calculate stocks bought
+                        let max_purchase = transaction.user_funds; // the current buying capacity of the user
+                        let mut num_stocks_purchased = 0;
+                        if max_purchase<(no_stocks as f64 * s_br){
+                            let val = max_purchase/s_br;
+                            num_stocks_purchased = val as i64;
+                        }else{
+                            num_stocks_purchased = no_stocks;
+                        }
+
+                        // deduct number of stocks from stock market
+                        stock_name_to_mod = stock[0].clone();
+                        stock_quantity_to_mod = num_stocks_purchased;
+
+
+                    }
+
+                    // modify stock quantity
+                    let mut stocks = stocks_for_thread.write().unwrap();
+                    for stock in stocks.iter_mut() {
+                        if stock[0] == stock_name_to_mod {
+                            let current_quantity: i32 = stock[3].parse().expect("Error converting string to i32");
+                            let new_quantity = current_quantity - stock_quantity_to_mod as i32;
+                            stock[3] = new_quantity.to_string();
+                            break; // only one entry per stock, we can exit the loop once the match is found
+                        }
+                    }
+
+                    // drop the lock
+                    drop(stocks);
+
+
+                    //send transaction feedback to user
+                    response = TransactionResponse {
+                        id: transaction.id,
+                        status: "Accepted".to_string(),
+                        num_stocks: stock_quantity_to_mod,
+                        buy_rate: buy_rate,
+                    };
+
+                }else{
+                    response = TransactionResponse {
+                        id: transaction.id,
+                        status: "Accepted".to_string(),
+                        num_stocks: 0,
+                        buy_rate: 0.0,
+                    };
+                }
+
                 if !limitOrder{
                     if transaction.name == "1".to_string(){
                         let tx1_locked = tx1_for_thread.lock().unwrap();
-                        tx1_locked.send("Accepted".to_string()).unwrap();
-                        println!("Broker has accepted {} order for Khabib Nurmagamedov as a Market order",transaction.buy_sell);
+                        tx1_locked.send(response).unwrap();
+                        println!("Broker has accepted {} order for Khabib Nurmagamedov as a Market order (id={})",transaction.buy_sell,transaction_id);
                     }
-                    if transaction.name == "2".to_string(){
-                        let tx1_locked = tx1_for_thread.lock().unwrap();
-                        tx1_locked.send("Accepted".to_string()).unwrap();
-                        println!("Broker has accepted {} order for Conor McGregor as a Market order",transaction.buy_sell);
+                    else if transaction.name == "2".to_string(){
+                        let tx2_locked = tx2_for_thread.lock().unwrap();
+                        tx2_locked.send(response).unwrap();
+                        println!("Broker has accepted {} order for Conor McGregor as a Market order (id={})",transaction.buy_sell,transaction_id);
                     }
-                    if transaction.name == "3".to_string(){
-                        let tx1_locked = tx1_for_thread.lock().unwrap();
-                        tx1_locked.send("Accepted".to_string()).unwrap();
-                        println!("Broker has accepted {} order for Jon Jones as a Market order",transaction.buy_sell);
-                    }
+                    else if transaction.name == "3".to_string(){
+                        let tx3_locked = tx3_for_thread.lock().unwrap();
+                        tx3_locked.send(response).unwrap();
+                        println!("Broker has accepted {} order for Jon Jones as a Market order (id={})",transaction.buy_sell,transaction_id);
+                    }    
                 }
 
-                // Limit Order (takes longer to execute than a market order)
-                if limitOrder{
-                    thread::sleep(Duration::from_millis(2000));
+                else{
+                    // Limit Order (takes longer to execute than a market order)
+                    thread::sleep(Duration::from_millis(1000));
                     if transaction.name == "1".to_string(){
                         let tx1_locked = tx1_for_thread.lock().unwrap();
-                        tx1_locked.send("Accepted".to_string()).unwrap();
-                        println!("Broker has accepted {} order for Khabib Nurmagamedov as a Limit order",transaction.buy_sell);
+                        tx1_locked.send(response).unwrap();
+                        println!("Broker has accepted {} order for Khabib Nurmagamedov as a Limit order (id={})",transaction.buy_sell,transaction_id);
                     }
-                    if transaction.name == "2".to_string(){
-                        let tx1_locked = tx1_for_thread.lock().unwrap();
-                        tx1_locked.send("Accepted".to_string()).unwrap();
-                        println!("Broker has accepted {} order for Conor McGregor as a Limit order",transaction.buy_sell);
+                    else if transaction.name == "2".to_string(){
+                        let tx2_locked = tx2_for_thread.lock().unwrap();
+                        tx2_locked.send(response).unwrap();
+                        println!("Broker has accepted {} order for Conor McGregor as a Limit order (id={})",transaction.buy_sell,transaction_id);
                     }
-                    if transaction.name == "3".to_string(){
-                        let tx1_locked = tx1_for_thread.lock().unwrap();
-                        tx1_locked.send("Accepted".to_string()).unwrap();
-                        println!("Broker has accepted {} order for Jon Jones as a Limit order",transaction.buy_sell);
+                    else if transaction.name == "3".to_string(){
+                        let tx3_locked = tx3_for_thread.lock().unwrap();
+                        tx3_locked.send(response).unwrap();
+                        println!("Broker has accepted {} order for Jon Jones as a Limit order (id={})",transaction.buy_sell,transaction_id);
                     }
                 }
             }
@@ -562,9 +712,45 @@ fn main() {
 
     });
 
+        
+    let mut handles = Vec::new();
+
+    //Start User 1 Thread
+    let tx_for_thread = tx.clone();
+    let stocks_for_thread = stocks.clone();
+    let handle = thread::spawn(move || {
+        // The thread's code goes here, operating on `user_portfolio`
+        // and using the cloned `tx_clone` and `stocks_clone` as needed
+        EventProcessingEngine(user1,stocks_for_thread,tx_for_thread,rx1);
+    });
+    handles.push(handle);
+
+    //Start User 2 Thread
+    let tx_for_thread = tx.clone();
+    let stocks_for_thread = stocks.clone();
+    let handle = thread::spawn(move || {
+        // The thread's code goes here, operating on `user_portfolio`
+        // and using the cloned `tx_clone` and `stocks_clone` as needed
+        EventProcessingEngine(user2,stocks_for_thread,tx_for_thread,rx2);
+    });
+    handles.push(handle);
+    
+    //Start User 3 Thread
+    let tx_for_thread = tx.clone();
+    let stocks_for_thread = stocks.clone();
+    let handle = thread::spawn(move || {
+        // The thread's code goes here, operating on `user_portfolio`
+        // and using the cloned `tx_clone` and `stocks_clone` as needed
+        EventProcessingEngine(user3,stocks_for_thread,tx_for_thread,rx3);
+    });
+    handles.push(handle);
 
     StockExchangeUpdate.join().unwrap();
-    EventProcessingEngine.join().unwrap();
     Broker.join().unwrap();
+    for handle in handles {
+        handle.join().unwrap();
+    }
+
+
 
 }

@@ -1,0 +1,1 @@
+fn(UserPortfolio, Arc<RwLock<Vec<[String; 8]>>>, Arc<Mutex<Sender<StockTransaction>>>, std::sync::mpsc::Receiver<String>) {EventProcessingEngine}
