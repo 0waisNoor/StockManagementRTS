@@ -1,0 +1,1 @@
+num_stocks_purchased
